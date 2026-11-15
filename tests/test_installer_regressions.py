@@ -40,9 +40,12 @@ class SshInstallerRegressionTests(unittest.TestCase):
 
     def test_ports_are_installed_even_when_default_port_is_commented(self):
         script = (ROOT / "install/ssh-vpn.sh").read_text()
-        self.assertIn("/etc/ssh/sshd_config.d/", script)
+        self.assertIn("/etc/ssh/sshd_config.d/00-kapal-api.conf", script)
         self.assertIn("sshd -t", script)
+        self.assertIn("/etc/systemd/system/ssh.socket.d/00-kapal-api.conf", script)
+        self.assertRegex(script, r"ListenStream=40000")
         self.assertRegex(script, r"Port\s+40000")
+        self.assertIn('ss -H -ltn', script)
 
 
 if __name__ == "__main__":

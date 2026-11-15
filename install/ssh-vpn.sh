@@ -195,7 +195,7 @@ if ! grep -Eq '^[[:space:]]*Include[[:space:]]+/etc/ssh/sshd_config\.d/\*\.conf'
     install -m 600 /etc/ssh/sshd_config.tmp /etc/ssh/sshd_config
     rm -f /etc/ssh/sshd_config.tmp
 fi
-cat > /etc/ssh/sshd_config.d/90-kapal-api.conf <<'SSH_CONFIG'
+cat > /etc/ssh/sshd_config.d/00-kapal-api.conf <<'SSH_CONFIG'
 Port 22
 Port 200
 Port 500
@@ -208,18 +208,53 @@ if ! sshd -t; then
     echo "Konfigurasi OpenSSH tidak valid; SSH tidak direstart."
     exit 1
 fi
-if systemctl reload ssh 2>/dev/null; then
-    :
-elif systemctl restart ssh; then
-    :
+if systemctl is-active --quiet ssh.socket; then
+    mkdir -p /etc/systemd/system/ssh.socket.d
+    cat > /etc/systemd/system/ssh.socket.d/00-kapal-api.conf <<'SSH_SOCKET'
+[Socket]
+ListenStream=
+ListenStream=22
+ListenStream=200
+ListenStream=500
+ListenStream=40000
+ListenStream=51443
+ListenStream=58080
+SSH_SOCKET
+    systemctl daemon-reload || {
+        echo "Gagal memuat konfigurasi socket OpenSSH."
+        exit 1
+    }
+    systemctl restart ssh.socket || {
+        echo "Gagal restart socket OpenSSH; akses SSH perlu diperiksa dari console."
+        exit 1
+    }
 else
-    echo "Gagal reload/restart OpenSSH."
+    systemctl enable ssh || {
+        echo "Gagal mengaktifkan layanan OpenSSH."
+        exit 1
+    }
+    if systemctl reload ssh 2>/dev/null; then
+        :
+    elif systemctl restart ssh; then
+        :
+    else
+        echo "Gagal reload/restart OpenSSH."
+        exit 1
+    fi
+fi
+if ! systemctl is-active --quiet ssh && ! systemctl is-active --quiet ssh.socket; then
+    echo "OpenSSH service/socket tidak aktif setelah konfigurasi."
     exit 1
 fi
-systemctl is-active --quiet ssh || {
-    echo "OpenSSH tidak aktif setelah reload/restart."
-    exit 1
-}
+for port in 22 200 500 40000 51443 58080; do
+    if ! ss -H -ltn | awk '{print $4}' | grep -Eq ":${port}$"; then
+        echo "OpenSSH tidak listen di port ${port}; periksa firewall atau port conflict."
+        exit 1
+    fi
+done
+if systemctl is-active --quiet ssh.socket; then
+    echo "OpenSSH aktif lewat ssh.socket; socket activation mungkin membatasi port custom."
+fi
 
 echo "=== Install Dropbear ==="
 # install dropbear
