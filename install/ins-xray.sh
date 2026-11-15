@@ -57,20 +57,50 @@ touch /var/log/xray/access.log
 touch /var/log/xray/error.log
 touch /var/log/xray/access2.log
 touch /var/log/xray/error2.log
-# / / Ambil Xray Core Version Terbaru
-latest_version="$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases | grep tag_name | sed -E 's/.*"v(.*)".*/\1/' | head -n 1)"
-bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install -u www-data --version 24.10.31
+# Install latest stable Xray release; do not pin a stale historical version.
+install_script="$(curl -fsSL https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" || {
+    echo "Gagal mengunduh installer Xray resmi."
+    exit 1
+}
+bash -c "$install_script" @ install -u www-data || {
+    echo "Instalasi Xray gagal."
+    exit 1
+}
 
-## crt xray
-systemctl stop nginx
-systemctl stop haproxy
-mkdir /root/.acme.sh
-curl https://acme-install.netlify.app/acme.sh -o /root/.acme.sh/acme.sh
-chmod +x /root/.acme.sh/acme.sh
-/root/.acme.sh/acme.sh --upgrade --auto-upgrade
-/root/.acme.sh/acme.sh --set-default-ca --server letsencrypt
-/root/.acme.sh/acme.sh --issue -d $domain --standalone -k ec-256
-~/.acme.sh/acme.sh --installcert -d $domain --fullchainpath /etc/xray/xray.crt --keypath /etc/xray/xray.key --ecc
+## Obtain TLS certificate without leaving pre-existing web services down on failure.
+nginx_was_active=0
+haproxy_was_active=0
+systemctl is-active --quiet nginx && nginx_was_active=1
+systemctl is-active --quiet haproxy && haproxy_was_active=1
+restore_frontends() {
+    if [[ "$nginx_was_active" == 1 ]]; then systemctl start nginx || true; fi
+    if [[ "$haproxy_was_active" == 1 ]]; then systemctl start haproxy || true; fi
+}
+systemctl stop nginx || true
+systemctl stop haproxy || true
+mkdir -p /root/.acme.sh
+if ! curl -fsSL https://acme-install.netlify.app/acme.sh -o /root/.acme.sh/acme.sh; then
+    echo "Gagal mengunduh acme.sh."
+    restore_frontends
+    exit 1
+fi
+chmod 700 /root/.acme.sh/acme.sh
+if ! /root/.acme.sh/acme.sh --upgrade --auto-upgrade ||
+   ! /root/.acme.sh/acme.sh --set-default-ca --server letsencrypt ||
+   ! /root/.acme.sh/acme.sh --issue -d "$domain" --standalone -k ec-256 ||
+   ! /root/.acme.sh/acme.sh --installcert -d "$domain" --fullchainpath /etc/xray/xray.crt --keypath /etc/xray/xray.key --ecc; then
+    echo "Penerbitan/pemasangan sertifikat gagal."
+    restore_frontends
+    exit 1
+fi
+if [[ ! -s /etc/xray/xray.crt || ! -s /etc/xray/xray.key ]]; then
+    echo "Sertifikat atau private key tidak terbentuk."
+    restore_frontends
+    exit 1
+fi
+chmod 600 /etc/xray/xray.key
+restore_frontends
+# Continue with installer-configured service restarts after configs validate.
 
 # nginx renew ssl
 echo -n '#!/bin/bash
@@ -114,7 +144,7 @@ cat > /etc/xray/config.json << END
             "clients": [
                {
                  "id": "${uuid}"                 
-#vless
+
              }
           ]
        },
@@ -134,7 +164,7 @@ cat > /etc/xray/config.json << END
                {
                  "id": "${uuid}",
                  "alterId": 0
-#vmess
+
              }
           ]
        },
@@ -154,7 +184,7 @@ cat > /etc/xray/config.json << END
            "clients": [
               {
                  "password": "${uuid}"
-#trojanws
+
               }
           ],
          "udp": true
@@ -175,7 +205,7 @@ cat > /etc/xray/config.json << END
            {
            "method": "aes-128-gcm",
           "password": "${uuid}"
-#ssws
+
            }
           ],
           "network": "tcp,udp"
@@ -196,7 +226,7 @@ cat > /etc/xray/config.json << END
            "clients": [
              {
                "id": "${uuid}"
-#vlessgrpc
+
              }
           ]
        },
@@ -216,13 +246,13 @@ cat > /etc/xray/config.json << END
                {
                  "id": "${uuid}",
                  "alterId": 0
-#vmessgrpc
+
              }
           ]
        },
-       "streamSettings":{
-         "network": "grpc",
-            "grpcSettings": {
+          "streamSettings":{
+             "network": "grpc",
+             "grpcSettings": {
                 "serviceName": "vmess-grpc"
           }
         }
@@ -236,7 +266,7 @@ cat > /etc/xray/config.json << END
              "clients": [
                {
                  "password": "${uuid}"
-#trojangrpc
+
                }
            ]
         },
@@ -256,7 +286,7 @@ cat > /etc/xray/config.json << END
           {
              "method": "aes-128-gcm",
              "password": "${uuid}"
-#ssgrpc
+
            }
          ],
            "network": "tcp,udp"
@@ -382,21 +412,50 @@ EOF
 #nginx config
 wget -O /etc/nginx/conf.d/xray.conf "${REPO}install/xray.conf"
 wget -O /etc/haproxy/haproxy.cfg "${REPO}install/haproxy.cfg"
-sed -i 's/xxx/$domain/' /etc/nginx/conf.d/xray.conf
-sed -i 's/xxx/$domain/' /etc/haproxy/haproxy.cfg
-cat /etc/xray/xray.key /etc/xray/xray.crt | tee /etc/haproxy/hap.pem
+if [[ -z "$domain" ]]; then
+    echo "Domain Xray kosong: /etc/xray/domain belum diset."
+    exit 1
+fi
+sed -i "s/xxx/${domain}/g" /etc/nginx/conf.d/xray.conf
+sed -i "s/xxx/${domain}/g" /etc/haproxy/haproxy.cfg
+cat /etc/xray/xray.key /etc/xray/xray.crt > /etc/haproxy/hap.pem || {
+    echo "Gagal membuat sertifikat gabungan HAProxy."
+    exit 1
+}
+chmod 600 /etc/haproxy/hap.pem
 echo -e "$yell[SERVICE]$NC Restart All service"
 systemctl daemon-reload
 sleep 0.1
 echo -e "[ ${green}ok${NC} ] Enable & restart xray "
-systemctl daemon-reload
+/usr/local/bin/xray run -test -config /etc/xray/config.json || {
+    echo "Konfigurasi Xray tidak valid; layanan tidak direstart."
+    exit 1
+}
+nginx -t || {
+    echo "Konfigurasi nginx tidak valid; layanan tidak direstart."
+    exit 1
+}
+haproxy -c -f /etc/haproxy/haproxy.cfg || {
+    echo "Konfigurasi HAProxy tidak valid; layanan tidak direstart."
+    exit 1
+}
 systemctl enable xray
 systemctl restart xray
+systemctl is-active --quiet xray || {
+    echo "Xray gagal aktif setelah restart."
+    exit 1
+}
 systemctl restart nginx
+systemctl is-active --quiet nginx || {
+    echo "Nginx gagal aktif setelah restart."
+    exit 1
+}
 systemctl enable haproxy
 systemctl restart haproxy
-systemctl enable runn
-systemctl restart runn
+systemctl is-active --quiet haproxy || {
+    echo "HAProxy gagal aktif setelah restart."
+    exit 1
+}
 
 sleep 0.1
 yellow() { echo -e "\\033[33;1m${*}\\033[0m"; }
