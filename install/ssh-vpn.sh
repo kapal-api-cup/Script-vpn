@@ -10,9 +10,19 @@ apt install -y screen curl jq bzip2 gzip vnstat coreutils rsyslog iftop zip unzi
 
 # initializing var
 export DEBIAN_FRONTEND=noninteractive
+apt-get update -y
+apt-get install -y openssh-server
 MYIP=$(wget -qO- ipinfo.io/ip)
 MYIP2="s/xxxxxxxxx/$MYIP/g"
-NET=$(ip -o $ANU -4 route show to default | awk '{print $5}')
+NET=$(ip -o -4 route show default | awk 'NR == 1 {print $5}')
+if [[ -z "$NET" ]]; then
+    echo "Tidak dapat menentukan interface default route."
+    exit 1
+fi
+if [[ -z "$MYIP" ]]; then
+    echo "Tidak dapat menentukan IP publik VPS."
+    exit 1
+fi
 if [[ -f /etc/os-release ]]; then
     . /etc/os-release
     OS_NAME=$ID
@@ -176,16 +186,40 @@ systemctl enable badvpn3
 systemctl start badvpn3 
 
 
-# setting port ssh
+# Configure OpenSSH through an idempotent drop-in. Validate before reload so a
+# bad config cannot silently take the remote access service down.
 cd
-sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/g' /etc/ssh/sshd_config
-sed -i '/Port 22/a Port 500' /etc/ssh/sshd_config
-sed -i '/Port 22/a Port 40000' /etc/ssh/sshd_config
-sed -i '/Port 22/a Port 51443' /etc/ssh/sshd_config
-sed -i '/Port 22/a Port 58080' /etc/ssh/sshd_config
-sed -i '/Port 22/a Port 200' /etc/ssh/sshd_config
-sed -i '/Port 22/a Port 22' /etc/ssh/sshd_config
-/etc/init.d/ssh restart
+mkdir -p /etc/ssh/sshd_config.d
+if ! grep -Eq '^[[:space:]]*Include[[:space:]]+/etc/ssh/sshd_config\.d/\*\.conf' /etc/ssh/sshd_config; then
+    printf '%s\n' 'Include /etc/ssh/sshd_config.d/*.conf' | cat - /etc/ssh/sshd_config > /etc/ssh/sshd_config.tmp
+    install -m 600 /etc/ssh/sshd_config.tmp /etc/ssh/sshd_config
+    rm -f /etc/ssh/sshd_config.tmp
+fi
+cat > /etc/ssh/sshd_config.d/90-kapal-api.conf <<'SSH_CONFIG'
+Port 22
+Port 200
+Port 500
+Port 40000
+Port 51443
+Port 58080
+PasswordAuthentication yes
+SSH_CONFIG
+if ! sshd -t; then
+    echo "Konfigurasi OpenSSH tidak valid; SSH tidak direstart."
+    exit 1
+fi
+if systemctl reload ssh 2>/dev/null; then
+    :
+elif systemctl restart ssh; then
+    :
+else
+    echo "Gagal reload/restart OpenSSH."
+    exit 1
+fi
+systemctl is-active --quiet ssh || {
+    echo "OpenSSH tidak aktif setelah reload/restart."
+    exit 1
+}
 
 echo "=== Install Dropbear ==="
 # install dropbear
