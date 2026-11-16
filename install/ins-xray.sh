@@ -394,20 +394,10 @@ LimitNOFILE=1000000
 WantedBy=multi-user.target
 
 EOF
-cat > /etc/systemd/system/runn.service <<EOF
-[Unit]
-Description=https://t.me/Newbie_Store24
-After=network.target
-
-[Service]
-Type=simple
-ExecStartPre=-/usr/bin/mkdir -p /var/run/xray
-ExecStart=/usr/bin/chown www-data:www-data /var/run/xray
-Restart=on-abort
-
-[Install]
-WantedBy=multi-user.target
-EOF
+# Remove legacy broken helper unit from previous installer runs.
+systemctl disable --now runn.service >/dev/null 2>&1 || true
+rm -f /etc/systemd/system/runn.service
+systemctl daemon-reload
 
 #nginx config
 wget -O /etc/nginx/conf.d/xray.conf "${REPO}install/xray.conf"
