@@ -67,22 +67,59 @@ bash -c "$install_script" @ install || { echo "Instalasi Xray gagal."; exit 1; }
 # Ownership setelah user xray dibuat oleh installer
 chown -R xray:xray /var/log/xray /run/xray 2>/dev/null || true
 
-## crt xray
+## crt xray (wildcard via Cloudflare DNS-01 bila CF_KEY tersedia)
 systemctl stop nginx
 systemctl stop haproxy
-mkdir /root/.acme.sh
-curl https://acme-install.netlify.app/acme.sh -o /root/.acme.sh/acme.sh
+mkdir -p /root/.acme.sh
+[ -s /root/.acme.sh/acme.sh ] || curl -fsSL https://acme-install.netlify.app/acme.sh -o /root/.acme.sh/acme.sh
 chmod +x /root/.acme.sh/acme.sh
 /root/.acme.sh/acme.sh --upgrade --auto-upgrade
 /root/.acme.sh/acme.sh --set-default-ca --server letsencrypt
-/root/.acme.sh/acme.sh --issue -d $domain --standalone -k ec-256
-~/.acme.sh/acme.sh --installcert -d $domain --fullchainpath /etc/xray/xray.crt --keypath /etc/xray/xray.key --ecc
 
-# nginx renew ssl
+[ -n "$domain" ] || { echo "[ERR] /etc/xray/domain kosong."; exit 1; }
+
+# Simpan kredensial CF permanen supaya cron renewal dapat renew wildcard
+if [ -n "${CF_KEY:-}" ]; then
+  grep -q "^SAVED_CF_Key=" /root/.acme.sh/account.conf 2>/dev/null || echo "SAVED_CF_Key='${CF_KEY}'" >> /root/.acme.sh/account.conf
+  chmod 600 /root/.acme.sh/account.conf 2>/dev/null || true
+fi
+
+# Jangan re-issue bila cert masih valid > 30 hari (hindari rate-limit + timpa cert sehat)
+NEED_ISSUE=1
+if [ -s /etc/xray/xray.crt ] && openssl x509 -checkend 2592000 -noout -in /etc/xray/xray.crt 2>/dev/null; then
+  NEED_ISSUE=0
+  echo "[INFO] Cert xray masih valid > 30 hari, lewati re-issue."
+fi
+
+if [ "$NEED_ISSUE" = "1" ]; then
+  ISSUED=0
+  if [ -n "${CF_KEY:-}" ]; then
+    export CF_Key="${CF_KEY}"
+    if /root/.acme.sh/acme.sh --issue --dns dns_cf --keylength ec-256 --force \
+         -d "$domain" -d "*.$domain"; then
+      ISSUED=1
+    fi
+  fi
+  if [ "$ISSUED" = "0" ]; then
+    echo "[WARN] Cloudflare tidak tersedia -> fallback standalone (apex only, TANPA wildcard)."
+    /root/.acme.sh/acme.sh --issue -d "$domain" --standalone -k ec-256
+  fi
+fi
+
+# Install cert + rebuild hap.pem setiap kali renewal
+/root/.acme.sh/acme.sh --installcert -d "$domain" \
+  --fullchainpath /etc/xray/xray.crt --keypath /etc/xray/xray.key --ecc \
+  --reloadcmd "cat /etc/xray/xray.key /etc/xray/xray.crt > /etc/haproxy/hap.pem && chmod 600 /etc/haproxy/hap.pem && systemctl restart haproxy 2>/dev/null; systemctl restart xray 2>/dev/null; true"
+
+# nginx renew ssl (cron 3-harian): renew + rebuild hap.pem + reload service
 echo -n '#!/bin/bash
 /etc/init.d/nginx stop
 "/root/.acme.sh"/acme.sh --cron --home "/root/.acme.sh" &> /root/renew_ssl.log
+cat /etc/xray/xray.key /etc/xray/xray.crt > /etc/haproxy/hap.pem 2>/dev/null
+chmod 600 /etc/haproxy/hap.pem 2>/dev/null
 /etc/init.d/nginx start
+systemctl restart haproxy 2>/dev/null
+systemctl restart xray 2>/dev/null
 /etc/init.d/nginx status
 ' > /usr/local/bin/ssl_renew.sh
 chmod +x /usr/local/bin/ssl_renew.sh
