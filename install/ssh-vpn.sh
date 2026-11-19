@@ -176,16 +176,17 @@ systemctl enable badvpn3
 systemctl start badvpn3 
 
 
-# setting port ssh
+# setting port ssh (idempoten — cegah port duplikat yang bikin ssh gagal restart)
 cd
 sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/g' /etc/ssh/sshd_config
-sed -i '/Port 22/a Port 500' /etc/ssh/sshd_config
-sed -i '/Port 22/a Port 40000' /etc/ssh/sshd_config
-sed -i '/Port 22/a Port 51443' /etc/ssh/sshd_config
-sed -i '/Port 22/a Port 58080' /etc/ssh/sshd_config
-sed -i '/Port 22/a Port 200' /etc/ssh/sshd_config
-sed -i '/Port 22/a Port 22' /etc/ssh/sshd_config
-/etc/init.d/ssh restart
+for p in 22 200 500 40000 51443 58080; do
+  grep -qE "^[[:space:]]*Port[[:space:]]+${p}([[:space:]]|$)" /etc/ssh/sshd_config || echo "Port ${p}" >> /etc/ssh/sshd_config
+done
+if sshd -t; then
+  systemctl restart ssh 2>/dev/null || /etc/init.d/ssh restart
+else
+  echo "Konfigurasi SSH tidak valid; restart dibatalkan."
+fi
 
 echo "=== Install Dropbear ==="
 # install dropbear
@@ -242,9 +243,9 @@ else
     apt install haproxy -y
 fi
 
-# Unduh file konfigurasi HAProxy
+# Unduh file konfigurasi HAProxy (URL lama 404 -> file 0 byte -> haproxy mati)
 echo "Mengunduh file konfigurasi HAProxy..."
-wget -O /etc/haproxy/haproxy.cfg "https://raw.githubusercontent.com/Kanggacor91/VIP/install/main/haproxy.cfg"
+wget -O /etc/haproxy/haproxy.cfg "${REPO}install/haproxy.cfg"
 
 # Reload daemon systemd
 echo "Memuat ulang daemon systemd..."

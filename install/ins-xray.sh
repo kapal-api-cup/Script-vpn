@@ -47,11 +47,9 @@ apt install curl pwgen openssl cron -y
 sleep 0.1
 echo -e "[ ${green}INFO$NC ] Downloading & Installing xray core"
 domainSock_dir="/run/xray";! [ -d $domainSock_dir ] && mkdir  $domainSock_dir
-chown www-data.www-data $domainSock_dir
 # Make Folder XRay
 mkdir -p /var/log/xray
 mkdir -p /etc/xray
-chown www-data.www-data /var/log/xray
 chmod +x /var/log/xray
 touch /var/log/xray/access.log
 touch /var/log/xray/error.log
@@ -59,7 +57,15 @@ touch /var/log/xray/access2.log
 touch /var/log/xray/error2.log
 # / / Ambil Xray Core Version Terbaru
 latest_version="$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases | grep tag_name | sed -E 's/.*"v(.*)".*/\1/' | head -n 1)"
-bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install -u www-data --version 24.10.31
+# PENTING: installer resmi Xray sudah MENGHAPUS flag "-u/--user". Mengirim
+# "-u www-data" bikin installer berhenti ("unknown option -- -") SEBELUM binary
+# dipasang, sehingga /usr/local/bin/xray tidak ada dan xray.service gagal start
+# (status=203/EXEC). Install tanpa -u; installer otomatis membuat user "xray"
+# (sama seperti VPS sonic yang sudah bekerja).
+install_script="$(curl -fsSL https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" || { echo "Gagal mengunduh installer Xray."; exit 1; }
+bash -c "$install_script" @ install || { echo "Instalasi Xray gagal."; exit 1; }
+# Ownership setelah user xray dibuat oleh installer
+chown -R xray:xray /var/log/xray /run/xray 2>/dev/null || true
 
 ## crt xray
 systemctl stop nginx
@@ -343,6 +349,9 @@ cat > /etc/xray/config.json << END
 END
 rm -rf /etc/systemd/system/xray.service.d
 rm -rf /etc/systemd/system/xray@.service
+# Samakan path config dengan installer resmi (seperti VPS sonic):
+# /usr/local/etc/xray/config.json -> symlink ke /etc/xray/config.json
+ln -sf /etc/xray/config.json /usr/local/etc/xray/config.json
 cat <<EOF> /etc/systemd/system/xray.service
 [Unit]
 Description=Xray Service
@@ -350,11 +359,12 @@ Documentation=https://github.com/xtls
 After=network.target nss-lookup.target
 
 [Service]
-User=www-data
+User=xray
+Group=xray
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
 NoNewPrivileges=true
-ExecStart=/usr/local/bin/xray run -config /etc/xray/config.json
+ExecStart=/usr/local/bin/xray run -config /usr/local/etc/xray/config.json
 Restart=on-failure
 RestartPreventExitStatus=23
 LimitNPROC=10000
@@ -372,7 +382,7 @@ After=network.target
 [Service]
 Type=simple
 ExecStartPre=-/usr/bin/mkdir -p /var/run/xray
-ExecStart=/usr/bin/chown www-data:www-data /var/run/xray
+ExecStart=/usr/bin/chown xray:xray /var/run/xray
 Restart=on-abort
 
 [Install]
@@ -382,8 +392,9 @@ EOF
 #nginx config
 wget -O /etc/nginx/conf.d/xray.conf "${REPO}install/xray.conf"
 wget -O /etc/haproxy/haproxy.cfg "${REPO}install/haproxy.cfg"
-sed -i 's/xxx/$domain/' /etc/nginx/conf.d/xray.conf
-sed -i 's/xxx/$domain/' /etc/haproxy/haproxy.cfg
+# Single-quote bikin $domain jadi literal (server_name salah). Pakai double-quote.
+sed -i "s/xxx/${domain}/g" /etc/nginx/conf.d/xray.conf
+sed -i "s/xxx/${domain}/g" /etc/haproxy/haproxy.cfg
 cat /etc/xray/xray.key /etc/xray/xray.crt | tee /etc/haproxy/hap.pem
 echo -e "$yell[SERVICE]$NC Restart All service"
 systemctl daemon-reload
