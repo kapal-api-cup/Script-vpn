@@ -176,12 +176,26 @@ systemctl enable badvpn3
 systemctl start badvpn3 
 
 
-# setting port ssh (idempoten — cegah port duplikat yang bikin ssh gagal restart)
+# setting port ssh (idempoten — cegah & bersihkan port duplikat)
 cd
 sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/g' /etc/ssh/sshd_config
-for p in 22 200 500 40000 51443 58080; do
-  grep -qE "^[[:space:]]*Port[[:space:]]+${p}([[:space:]]|$)" /etc/ssh/sshd_config || echo "Port ${p}" >> /etc/ssh/sshd_config
-done
+# Tulis port ke dropin (satu sumber, aman diulang)
+mkdir -p /etc/ssh/sshd_config.d
+cat > /etc/ssh/sshd_config.d/00-kapal-api.conf <<'EOF'
+Port 22
+Port 200
+Port 500
+Port 40000
+Port 51443
+Port 58080
+PasswordAuthentication yes
+EOF
+# Hapus Port lama/duplikat di file utama (asli script ini menumpuk via sed /Port 22/a)
+sed -i -E '/^[[:space:]]*Port[[:space:]]+[0-9]+/d' /etc/ssh/sshd_config
+# Pastikan Include ada SEBELUM directive lain
+if ! grep -qE '^[[:space:]]*Include[[:space:]]+/etc/ssh/sshd_config\.d/\*\.conf' /etc/ssh/sshd_config; then
+  sed -i '1i Include /etc/ssh/sshd_config.d/*.conf' /etc/ssh/sshd_config
+fi
 if sshd -t; then
   systemctl restart ssh 2>/dev/null || /etc/init.d/ssh restart
 else

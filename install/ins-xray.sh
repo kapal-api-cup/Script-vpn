@@ -395,6 +395,8 @@ wget -O /etc/haproxy/haproxy.cfg "${REPO}install/haproxy.cfg"
 # Single-quote bikin $domain jadi literal (server_name salah). Pakai double-quote.
 sed -i "s/xxx/${domain}/g" /etc/nginx/conf.d/xray.conf
 sed -i "s/xxx/${domain}/g" /etc/haproxy/haproxy.cfg
+# Template xray.conf juga punya placeholder literal '$domain' (blok listen 1012).
+sed -i "s/\$domain/${domain}/g" /etc/nginx/conf.d/xray.conf
 cat /etc/xray/xray.key /etc/xray/xray.crt | tee /etc/haproxy/hap.pem
 echo -e "$yell[SERVICE]$NC Restart All service"
 systemctl daemon-reload
