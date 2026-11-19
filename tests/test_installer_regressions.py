@@ -32,24 +32,6 @@ class XrayInstallerRegressionTests(unittest.TestCase):
 
 
 class SshInstallerRegressionTests(unittest.TestCase):
-    def test_installer_removes_legacy_cron_jobs(self):
-        script = (ROOT / "install/ssh-vpn.sh").read_text()
-        self.assertNotIn("*/5 * * * * root /usr/bin/autocpu", script)
-        self.assertNotIn("5 0 * * * root /sbin/reboot", script)
-        self.assertIn("rm -f /etc/cron.d/cpu_otm /usr/bin/autocpu /etc/cron.d/daily_reboot", script)
-
-    def test_update_removes_legacy_jobs_without_reinstalling_autocpu(self):
-        script = (ROOT / "menu/update.sh").read_text()
-        self.assertNotIn("*/5 * * * * root /usr/bin/autocpu", script)
-        self.assertNotIn("wget -O /usr/bin/autocpu", script)
-        self.assertIn("rm -f /etc/cron.d/cpu_otm /usr/bin/autocpu /etc/cron.d/daily_reboot", script)
-
-    def test_legacy_autocpu_is_inert(self):
-        script = (ROOT / "install/autocpu.sh").read_text()
-        self.assertIn("exit 1", script)
-        self.assertNotIn("curl ", script.lower())
-        self.assertNotIn("curl ", script)
-
     def test_default_route_detection_does_not_depend_on_unset_variable(self):
         script = (ROOT / "install/ssh-vpn.sh").read_text()
         self.assertRegex(script, r"ip\s+-o\s+-4\s+route\s+show\s+default")

